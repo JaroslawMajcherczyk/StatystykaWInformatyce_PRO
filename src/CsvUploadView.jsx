@@ -32,11 +32,13 @@ export default function CsvUploadView({
         if (generic === "Data") {
           obj[generic] = String(value ?? "").trim();
         } else {
-          const num =
-            typeof value === "number"
-              ? value
-              : parseFloat(String(value ?? "").replace(",", "."));
-          obj[generic] = Number.isFinite(num) ? num : null;
+          const raw =
+          typeof value === "number"
+            ? value
+            : parseFloat(String(value ?? "").replace(",", "."));
+
+            obj[generic] =
+              Number.isFinite(raw) ? Number(raw.toFixed(2)) : null;
         }
       });
       return obj;
@@ -219,7 +221,9 @@ export default function CsvUploadView({
                                 whiteSpace: "nowrap",
                                 }}
                             >
-                                {row[h]}
+                                {typeof row[h] === "number"
+                                ? row[h].toFixed(2)
+                                : row[h]}
                             </td>
                             ))}
                         </tr>
