@@ -48,6 +48,18 @@ export default function ChernoffFacesView({ data, headerMap = [] }) {
     return Object.keys(data[0]).filter((k) => k !== "Data");
   }, [data]);
 
+  // ✅ HOOKI MUSZĄ BYĆ PRZED return
+  const [visibleAttrs, setVisibleAttrs] = useState([]);
+
+  useEffect(() => {
+    // po zmianie danych – domyślnie pokaż pierwsze 5 atrybutów
+    if (attributeKeys.length >= 5) {
+      setVisibleAttrs(attributeKeys.slice(0, 5));
+    } else {
+      setVisibleAttrs([]);
+    }
+  }, [attributeKeys]);
+
   // mapka generic -> ładna etykieta, np. A1 -> "A1 (EUR)"
   const labelMap = useMemo(() => {
     const map = {};
@@ -76,10 +88,10 @@ export default function ChernoffFacesView({ data, headerMap = [] }) {
 
       if (vals.length === 0) continue;
 
-      const { level, q1, q2, q3 } = chooseLevel(vals);
+      const { level, q1, q2, q3, x } = chooseLevel(vals);
       const shape = levelToShape(level);
 
-      result[attr] = { level, shape, q1, q2, q3 };
+      result[attr] = { level, shape, q1, q2, q3, x };
     }
 
     return result;
@@ -97,7 +109,7 @@ export default function ChernoffFacesView({ data, headerMap = [] }) {
     return (
       <p>
         Do rysowania twarzy Chernoffa potrzebnych jest co najmniej 5 atrybutów.
-        W pliku powinno być: Data, A1, A2, A3, A4, A5 (np. Waluty).
+        W pliku powinno być: Data, A1, A2, A3, A4, A5.
       </p>
     );
   }
@@ -124,18 +136,6 @@ export default function ChernoffFacesView({ data, headerMap = [] }) {
     );
   }
 
-  // widoczność poszczególnych części twarzy (checkboxy)
-  const [visibleAttrs, setVisibleAttrs] = useState([]);
-
-  useEffect(() => {
-    // po zmianie danych – domyślnie pokaż pierwsze 5 atrybutów
-    if (attributeKeys.length >= 5) {
-      setVisibleAttrs(attributeKeys.slice(0, 5));
-    } else {
-      setVisibleAttrs([]);
-    }
-  }, [attributeKeys]);
-
   const toggleAttr = (attr) => {
     setVisibleAttrs((prev) =>
       prev.includes(attr) ? prev.filter((a) => a !== attr) : [...prev, attr]
@@ -148,11 +148,8 @@ export default function ChernoffFacesView({ data, headerMap = [] }) {
     allAttrsForFace.every((a) => visibleAttrs.includes(a));
 
   const handleToggleAll = (checked) => {
-    if (checked) {
-      setVisibleAttrs(allAttrsForFace);
-    } else {
-      setVisibleAttrs([]);
-    }
+    if (checked) setVisibleAttrs(allAttrsForFace);
+    else setVisibleAttrs([]);
   };
 
   const showHead = visibleAttrs.includes(a1);
@@ -173,12 +170,9 @@ export default function ChernoffFacesView({ data, headerMap = [] }) {
         <strong>Nos:</strong> {getAttrLabel(a4)} &nbsp;|&nbsp;
         <strong>Uszy:</strong> {getAttrLabel(a5)}
         <br />
-        Poziomy kwantylowe q1/q2/q3 (na podstawie rozkładu i ostatniej
-        wartości) mapują się na kształty:
-        q1 → kwadrat, q2 → okrąg, q3 → trójkąt.
+        Poziomy: q1 → kwadrat, q2 → okrąg, q3 → trójkąt.
       </p>
 
-      {/* NOWY LAYOUT: twarz po lewej, checkboxy po prawej */}
       <div
         style={{
           display: "flex",
@@ -201,6 +195,8 @@ export default function ChernoffFacesView({ data, headerMap = [] }) {
           showMouth={showMouth}
           showNose={showNose}
           showEars={showEars}
+          variant="full"
+          showFooterText={true}
         />
 
         {/* CHECKBOXY */}
@@ -264,6 +260,57 @@ export default function ChernoffFacesView({ data, headerMap = [] }) {
           </label>
         </div>
       </div>
+
+      {/* ✅ POPRAWNA LEGENDA: 3 TWARZE "WSZYSTKO = SHAPE" */}
+      <ChernoffLegendAllShapes />
+    </div>
+  );
+}
+
+function ChernoffLegendAllShapes() {
+  const items = [
+    { level: "q1", shape: "square", label: "q1 (kwadrat)" },
+    { level: "q2", shape: "circle", label: "q2 (okrąg)" },
+    { level: "q3", shape: "triangle", label: "q3 (trójkąt)" },
+  ];
+
+  return (
+    <div style={{ marginTop: "2rem" }}>
+      <h3>Legenda – przykładowe twarze (q1 / q2 / q3)</h3>
+
+      <div
+        style={{
+          display: "flex",
+          gap: "1.5rem",
+          justifyContent: "center",
+          flexWrap: "wrap",
+          marginTop: "0.75rem",
+        }}
+      >
+        {items.map((it) => (
+          <div key={it.level} style={{ textAlign: "center" }}>
+            <ChernoffFaceDiscrete
+              head={{ shape: it.shape, attr: "A1", label: "" }}
+              eyes={{ shape: it.shape, attr: "A2", label: "" }}
+              mouth={{ shape: it.shape, attr: "A3", label: "" }}
+              nose={{ shape: it.shape, attr: "A4", label: "" }}
+              ears={{ shape: it.shape, attr: "A5", label: "" }}
+              showHead={true}
+              showEyes={true}
+              showMouth={true}
+              showNose={true}
+              showEars={true}
+              variant="mini"
+              showFooterText={false}
+            />
+            <div style={{ marginTop: 8, fontSize: 12 }}>{it.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <p style={{ fontSize: 12, marginTop: 10 }}>
+        Mapowanie: q1 → kwadrat, q2 → okrąg, q3 → trójkąt.
+      </p>
     </div>
   );
 }
@@ -279,43 +326,49 @@ function ChernoffFaceDiscrete({
   showMouth,
   showNose,
   showEars,
+  variant = "full", // 'full' | 'mini'
+  showFooterText = true,
 }) {
-  // POWIĘKSZYŁEM SVG
-  const width = 420;
-  const height = 280;
+  const isMini = variant === "mini";
+
+  const width = isMini ? 220 : 420;
+  const height = isMini ? 160 : 280;
+
   const cx = width / 2;
-  const cy = height / 2 - 10;
+  const cy = height / 2 - (isMini ? 0 : 10);
 
   const stroke = "#333";
-  const strokeWidth = 2;
+  const strokeWidth = isMini ? 1.5 : 2;
 
-  const headSize = 140;
+  const k = isMini ? 0.60 : 1;
 
-  const eyeOffsetX = 40;
-  const eyeY = cy - 30;
-  const eyeSize = 20;
+  const headSize = 140 * k;
 
-  const mouthY = cy + 40;
-  const mouthWidth = 80;
+  const eyeOffsetX = 40 * k;
+  const eyeY = cy - 30 * k;
+  const eyeSize = 20 * k;
 
-  const noseYTop = cy - 5;
-  const noseHeight = 40;
+  const mouthY = cy + 40 * k;
+  const mouthWidth = 80 * k;
 
-  const earOffsetX = 90;
-  const earY = cy - 10;
-  const earSize = 24;
+  const noseYTop = cy - 5 * k;
+  const noseHeight = 40 * k;
+
+  const earOffsetX = 90 * k;
+  const earY = cy - 10 * k;
+  const earSize = 24 * k;
 
   return (
     <svg
       width={width}
       height={height}
-      style={{ border: "1px solid #ccc", background: "#222" }}
+      style={{ border: "1px solid #ccc", background: "#222", borderRadius: 6 }}
     >
-      {/* GŁOWA – A1 */}
+      {/* GŁOWA */}
       {showHead &&
         renderHeadShape(head.shape, cx, cy, headSize, stroke, strokeWidth)}
 
-      {/* USZY – A5 */}
+      {/* USZY */}
       {showEars &&
         renderEarShape(
           ears.shape,
@@ -335,7 +388,7 @@ function ChernoffFaceDiscrete({
           strokeWidth
         )}
 
-      {/* OCZY – A2 */}
+      {/* OCZY */}
       {showEyes &&
         renderEyeShape(
           eyes.shape,
@@ -355,7 +408,7 @@ function ChernoffFaceDiscrete({
           strokeWidth
         )}
 
-      {/* NOS – A4 */}
+      {/* NOS */}
       {showNose &&
         renderNoseShape(
           nose.shape,
@@ -366,7 +419,7 @@ function ChernoffFaceDiscrete({
           strokeWidth
         )}
 
-      {/* USTA – A3 */}
+      {/* USTA */}
       {showMouth &&
         renderMouthShape(
           mouth.shape,
@@ -377,22 +430,26 @@ function ChernoffFaceDiscrete({
           strokeWidth
         )}
 
-      {/* BIAŁE NAPISY POD TWARZĄ */}
-      {textWrapped(
-        `${head.label}: ${head.shape}, ${eyes.label}: ${eyes.shape}, ${mouth.label}: ${mouth.shape}, ${nose.label}: ${nose.shape}, ${ears.label}: ${ears.shape}`,
-        cx,
-        height - 55,
-        300 // max szerokość linii
+      {/* NAPISY TYLKO W PEŁNYM WIDOKU */}
+      {!isMini && showFooterText && (
+        <>
+          {textWrapped(
+            `${head.label}: ${head.shape}, ${eyes.label}: ${eyes.shape}, ${mouth.label}: ${mouth.shape}, ${nose.label}: ${nose.shape}, ${ears.label}: ${ears.shape}`,
+            cx,
+            height - 55,
+            300
+          )}
+          <text
+            x={cx}
+            y={height - 20}
+            textAnchor="middle"
+            fontSize="10"
+            fill="#ffffff"
+          >
+            q1 → kwadrat, q2 → okrąg, q3 → trójkąt (wg rozkładu i ostatniej wartości)
+          </text>
+        </>
       )}
-      <text
-        x={cx}
-        y={height - 20}
-        textAnchor="middle"
-        fontSize="10"
-        fill="#ffffff"
-      >
-        q1 → kwadrat, q2 → okrąg, q3 → trójkąt (wg rozkładu i ostatniej wartości)
-      </text>
     </svg>
   );
 }
@@ -488,7 +545,7 @@ function textWrapped(text, x, y, maxWidth) {
 
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
-  ctx.font = "11px sans-serif"; // dopasowane do SVG
+  ctx.font = "11px sans-serif";
 
   for (let w of words) {
     const test = current.length ? current + " " + w : w;

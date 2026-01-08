@@ -10,12 +10,133 @@ import {
   Legend,
   ResponsiveContainer,
   Brush,
+  BarChart,
+  Bar,
+  Cell,
 } from "recharts";
 
 const LINE_COLORS = ["#8884d8", "#82ca9d", "#ff7300", "#ff0000", "#0088fe"];
 
+/* =======================
+   STATYSTYKI (z StatisticsView.jsx)
+   ======================= */
+
+function quantile(sorted, p) {
+  const n = sorted.length;
+  if (n === 0) return null;
+  if (n === 1) return sorted[0];
+
+  const pos = (n - 1) * p;
+  const lowerIndex = Math.floor(pos);
+  const upperIndex = Math.ceil(pos);
+
+  if (lowerIndex === upperIndex) return sorted[lowerIndex];
+
+  const lower = sorted[lowerIndex];
+  const upper = sorted[upperIndex];
+  const fraction = pos - lowerIndex;
+  return lower + (upper - lower) * fraction;
+}
+
+function computeMode(series) {
+  if (!series || series.length === 0) return null;
+
+  const freq = new Map();
+  for (const v of series) {
+    const key = Number(v.toFixed(3));
+    freq.set(key, (freq.get(key) || 0) + 1);
+  }
+
+  let bestValue = null;
+  let bestCount = 0;
+  for (const [value, count] of freq.entries()) {
+    if (count > bestCount) {
+      bestCount = count;
+      bestValue = value;
+    }
+  }
+  return bestValue;
+}
+
+function computeStats(series) {
+  const n = series.length;
+  if (n === 0) return null;
+
+  const sorted = [...series].sort((a, b) => a - b);
+  const sum = series.reduce((acc, v) => acc + v, 0);
+  const mean = sum / n;
+
+  const median = quantile(sorted, 0.5);
+  const q1 = quantile(sorted, 0.25);
+  const q2 = median;
+  const q3 = quantile(sorted, 0.75);
+
+  const min = sorted[0];
+  const max = sorted[sorted.length - 1];
+  const range = max - min;
+
+  let m2 = 0;
+  let m3 = 0;
+  let m4 = 0;
+  for (const x of series) {
+    const d = x - mean;
+    const d2 = d * d;
+    m2 += d2;
+    m3 += d2 * d;
+    m4 += d2 * d2;
+  }
+
+  const variance = n > 1 ? m2 / (n - 1) : 0;
+  const stdDev = Math.sqrt(variance);
+
+  let skewness = null;
+  let kurtosis = null;
+
+  if (n > 2 && stdDev !== 0) {
+    const s3 = Math.pow(stdDev, 3);
+    skewness = (n * m3) / ((n - 1) * (n - 2) * s3);
+  }
+
+  if (n > 3 && stdDev !== 0) {
+    const s4 = Math.pow(stdDev, 4);
+    const g2 =
+      ((n * (n + 1)) / ((n - 1) * (n - 2) * (n - 3))) * (m4 / s4) -
+      (3 * (n - 1) * (n - 1)) / ((n - 2) * (n - 3));
+    kurtosis = g2;
+  }
+
+  const mode = computeMode(series);
+
+  return {
+    count: n,
+    mean,
+    median,
+    mode,
+    stdDev,
+    q1,
+    q2,
+    q3,
+    min,
+    max,
+    range,
+    skewness,
+    kurtosis,
+  };
+}
+
+function fmtStat(v, digits = 4) {
+  if (v === null || v === undefined || Number.isNaN(v)) return "–";
+  if (typeof v === "number" && Number.isFinite(v)) return v.toFixed(digits);
+  return String(v);
+}
+
+/* =======================
+   GŁÓWNY WIDOK
+   ======================= */
+
 export default function ChartView({ data, headerMap }) {
   const [selectedAttr, setSelectedAttr] = useState("ALL");
+  const [selectedStat, setSelectedStat] = useState("NONE"); // ✅ nowy wybór statystyki
   const [isZoomed, setIsZoomed] = useState(false);
 
   const chartData = useMemo(() => data ?? [], [data]);
@@ -27,6 +148,9 @@ export default function ChartView({ data, headerMap }) {
       data.some((row) => typeof row[k] === "number" && Number.isFinite(row[k]))
     );
   }, [data]);
+
+  // ✅ bierzemy pierwsze 5 atrybutów do wykresu statystyk (A1..A5)
+  const firstFiveAttrs = useMemo(() => attributeKeys.slice(0, 5), [attributeKeys]);
 
   const headerLabelMap = useMemo(() => {
     const map = {};
@@ -50,7 +174,7 @@ export default function ChartView({ data, headerMap }) {
     return `Data (${orig})`;
   };
 
-  // stały kolor dla atrybutu, niezależnie od filtrowania
+  // stały kolor dla atrybutu
   const attrColorMap = useMemo(() => {
     const map = {};
     attributeKeys.forEach((attr, idx) => {
@@ -66,7 +190,6 @@ export default function ChartView({ data, headerMap }) {
     }
 
     let max = 0;
-
     for (const row of data) {
       for (const attr of attributeKeys) {
         const v = row[attr];
@@ -77,12 +200,12 @@ export default function ChartView({ data, headerMap }) {
     }
 
     if (!Number.isFinite(max) || max <= 0) return [0, 1];
-
-    const pad = max * 0.1; // 10% marginesu
+    const pad = max * 0.1;
     return [0, max + pad];
   }, [data, attributeKeys]);
 
   const handleAttrChange = (e) => setSelectedAttr(e.target.value);
+  const handleStatChange = (e) => setSelectedStat(e.target.value);
 
   const attributesToShow =
     selectedAttr === "ALL" ? attributeKeys : [selectedAttr];
@@ -116,7 +239,7 @@ export default function ChartView({ data, headerMap }) {
   const fmt2 = (v) =>
     typeof v === "number" && Number.isFinite(v) ? v.toFixed(2) : v;
 
-  const renderTooltip = ({ active, payload, label }) => {
+  const renderLineTooltip = ({ active, payload, label }) => {
     if (!active || !payload || payload.length === 0) return null;
 
     return (
@@ -171,9 +294,9 @@ export default function ChartView({ data, headerMap }) {
         />
 
         <YAxis
-          domain={yDomain}                 // ✅ od 0
+          domain={yDomain}
           allowDecimals={true}
-          tickFormatter={(v) => Number(v).toFixed(2)} // ✅ 2 miejsca
+          tickFormatter={(v) => Number(v).toFixed(2)}
           tick={{ fill: "#ddd", fontSize: zoomed ? 14 : 12 }}
           label={{
             value: "Wartość",
@@ -184,8 +307,12 @@ export default function ChartView({ data, headerMap }) {
           }}
         />
 
-        <Tooltip content={renderTooltip} />
-        <Legend verticalAlign="top" align="center" wrapperStyle={{ paddingBottom: 10 }} />
+        <Tooltip content={renderLineTooltip} />
+        <Legend
+          verticalAlign="top"
+          align="center"
+          wrapperStyle={{ paddingBottom: 10 }}
+        />
 
         {attributesToShow.map((attr) => (
           <Line
@@ -210,11 +337,103 @@ export default function ChartView({ data, headerMap }) {
     </ResponsiveContainer>
   );
 
+  /* =======================
+     WYKRES SŁUPKOWY STATYSTYK
+     ======================= */
+
+  const statOptions = [
+    { key: "mean", label: "Średnia" },
+    { key: "median", label: "Mediana" },
+    { key: "mode", label: "Dominanta" },
+    { key: "stdDev", label: "Odchylenie standardowe" },
+    { key: "q1", label: "Q1" },
+    { key: "q2", label: "Q2" },
+    { key: "q3", label: "Q3" },
+    { key: "min", label: "Min" },
+    { key: "max", label: "Max" },
+    { key: "range", label: "Rozstęp" },
+    { key: "skewness", label: "Skośność" },
+    { key: "kurtosis", label: "Kurtoza" },
+  ];
+
+  const statsByAttr = useMemo(() => {
+    if (!data || data.length === 0) return null;
+
+    const result = {};
+    for (const attr of firstFiveAttrs) {
+      const series = data
+        .map((row) => row[attr])
+        .filter((v) => typeof v === "number" && Number.isFinite(v));
+
+      result[attr] = computeStats(series);
+    }
+    return result;
+  }, [data, firstFiveAttrs]);
+
+  const barData = useMemo(() => {
+    if (selectedStat === "NONE") return [];
+    if (!statsByAttr) return [];
+
+    return firstFiveAttrs.map((attr) => {
+      const st = statsByAttr[attr];
+      const raw = st ? st[selectedStat] : null;
+
+      const value =
+        typeof raw === "number" && Number.isFinite(raw) ? raw : null;
+
+      return {
+        attr,
+        name: getAttrLabel(attr),
+        value,
+        raw,
+      };
+    });
+  }, [selectedStat, statsByAttr, firstFiveAttrs, headerLabelMap]);
+
+  const anyBarValue = useMemo(() => {
+    if (!barData || barData.length === 0) return false;
+    return barData.some((d) => typeof d.value === "number" && Number.isFinite(d.value));
+  }, [barData]);
+
+  const renderBarTooltip = ({ active, payload, label }) => {
+    if (!active || !payload || payload.length === 0) return null;
+    const p = payload[0]?.payload;
+    if (!p) return null;
+
+    const statLabel =
+      statOptions.find((s) => s.key === selectedStat)?.label ?? selectedStat;
+
+    return (
+      <div
+        style={{
+          background: "#222",
+          border: "1px solid #555",
+          padding: "0.5rem 0.75rem",
+          borderRadius: 6,
+        }}
+      >
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>{p.name}</div>
+        <div style={{ fontSize: 13 }}>
+          {statLabel}: <strong>{fmtStat(p.raw, 4)}</strong>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div>
       <h2>Wizualizacja danych</h2>
 
-      <div style={{ textAlign: "center", marginBottom: "0.75rem" }}>
+      <div
+        style={{
+          textAlign: "center",
+          marginBottom: "0.75rem",
+          display: "flex",
+          justifyContent: "center",
+          gap: "1.25rem",
+          flexWrap: "wrap",
+        }}
+      >
         <label>
           Wybierz atrybut:&nbsp;
           <select value={selectedAttr} onChange={handleAttrChange}>
@@ -226,9 +445,21 @@ export default function ChartView({ data, headerMap }) {
             ))}
           </select>
         </label>
+
+        <label>
+          Wybierz statystykę (słupki):&nbsp;
+          <select value={selectedStat} onChange={handleStatChange}>
+            <option value="NONE">— brak —</option>
+            {statOptions.map((s) => (
+              <option key={s.key} value={s.key}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
-      {/* NORMALNY WIDOK */}
+      {/* WYKRES LINIOWY */}
       <div
         onDoubleClick={toggleZoom}
         title="Podwójny klik lewym: powiększ / pomniejsz"
@@ -244,10 +475,72 @@ export default function ChartView({ data, headerMap }) {
         <Chart zoomed={false} />
       </div>
 
-      {/* FULLSCREEN OVERLAY */}
+      {/* ✅ WYKRES SŁUPKOWY STATYSTYK */}
+      {selectedStat !== "NONE" && (
+        <div style={{ marginTop: "1.5rem", padding: "0 1rem" }}>
+          <h3 style={{ textAlign: "center" }}>
+            Statystyka:{" "}
+            {statOptions.find((s) => s.key === selectedStat)?.label ?? selectedStat}
+            {" "} (A1..A5)
+          </h3>
+
+          {!anyBarValue ? (
+            <p style={{ textAlign: "center" }}>
+              Brak danych do wykresu słupkowego dla tej statystyki (np. za mało obserwacji dla skośności/kurtozy).
+            </p>
+          ) : (
+            <div style={{ width: "100%", height: 320 }}>
+              <ResponsiveContainer>
+                <BarChart
+                  data={barData}
+                  margin={{ top: 20, right: 20, left: 10, bottom: 60 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#555" vertical={false} />
+                  <XAxis
+                    dataKey="attr"
+                    tick={{ fill: "#ddd", fontSize: 12 }}
+                    tickMargin={10}
+                    angle={-25}
+                    textAnchor="end"
+                    height={60}
+                  />
+                  <YAxis
+                    tick={{ fill: "#ddd", fontSize: 12 }}
+                    tickFormatter={(v) =>
+                      typeof v === "number" && Number.isFinite(v) ? v.toFixed(3) : v
+                    }
+                  />
+                  <Tooltip content={renderBarTooltip} />
+                  <Legend
+                    verticalAlign="top"
+                    align="center"
+                    wrapperStyle={{ paddingBottom: 10 }}
+                  />
+
+                  <Bar
+                    name={statOptions.find((s) => s.key === selectedStat)?.label ?? "Statystyka"}
+                    dataKey="value"
+                  >
+                    {barData.map((entry) => (
+                      <Cell
+                        key={entry.attr}
+                        fill={attrColorMap[entry.attr] ?? LINE_COLORS[0]}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+              <div style={{ textAlign: "center", fontSize: 12, marginTop: 6, opacity: 0.9 }}>
+                Kolory odpowiadają atrybutom jak w wykresie liniowym.
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* FULLSCREEN OVERLAY (tylko dla liniowego, jak było) */}
       {isZoomed && (
         <div
-          // opcjonalnie: klik w tło zamyka (pomaga, jakby ktoś nie trafił w X)
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) setIsZoomed(false);
           }}
@@ -284,8 +577,8 @@ export default function ChartView({ data, headerMap }) {
               type="button"
               onClick={(e) => {
                 e.preventDefault();
-                e.stopPropagation();       // ✅ żeby nic nie przechodziło wyżej
-                setIsZoomed(false);        // ✅ zamyka zawsze
+                e.stopPropagation();
+                setIsZoomed(false);
               }}
               onDoubleClick={(e) => {
                 e.preventDefault();
@@ -305,8 +598,6 @@ export default function ChartView({ data, headerMap }) {
                 color: "#ddd",
                 cursor: "pointer",
                 zIndex: 2,
-
-                // ✅ X idealnie na środku
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
